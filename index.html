@@ -266,18 +266,36 @@ hr { margin: 16px 0; border: 0; height: 1px; background: #e2e8f0; }
 
 </div>
 <script>
+// ─── localStorage 安全ラッパー（使えない環境でもクラッシュしない）────
+const _store = (function() {
+  const mem = {};
+  try {
+    localStorage.setItem('__test__', '1');
+    localStorage.removeItem('__test__');
+    return {
+      get: function(k) { return localStorage.getItem(k); },
+      set: function(k, v) { localStorage.setItem(k, v); },
+    };
+  } catch(e) {
+    return {
+      get: function(k) { return mem[k] !== undefined ? mem[k] : null; },
+      set: function(k, v) { mem[k] = v; },
+    };
+  }
+})();
+
 let predictions = [];
 let currentArticleData = null;
 let multipleScenarios = [];
 let usedScenarios = [];
 
 function saveAllData() {
-localStorage.setItem('oke_us_v2_tracker', JSON.stringify(predictions));
-localStorage.setItem('oke_us_v2_used', JSON.stringify(usedScenarios));
+try { _store.set('oke_us_v2_tracker', JSON.stringify(predictions)); } catch(e) {}
+try { _store.set('oke_us_v2_used', JSON.stringify(usedScenarios)); } catch(e) {}
 }
 function loadAllData() {
-predictions = JSON.parse(localStorage.getItem('oke_us_v2_tracker') || '[]');
-usedScenarios = JSON.parse(localStorage.getItem('oke_us_v2_used') || '[]');
+try { predictions  = JSON.parse(_store.get('oke_us_v2_tracker') || '[]'); } catch(e) { predictions = []; }
+try { usedScenarios = JSON.parse(_store.get('oke_us_v2_used') || '[]'); } catch(e) { usedScenarios = []; }
 renderTracker(); checkOneWeekAlerts(); renderUsedHistory();
 }
 
@@ -500,7 +518,7 @@ const closingMeta = (s.metaphors && s.metaphors.closing) || '';
 const NL = String.fromCharCode(10);
 currentArticleData = {
 title: s.title, newsChain: s.newsChain,
-causalStory: s.causalStory + NL + NL + (closingMeta ? closingMeta + NL + NL : '') + '📌 あなたはこのシナリオ、何点だと思う？コメントで教えてください！',
+causalStory: s.causalStory + NL + NL + (closingMeta ? closingMeta + NL + NL : '') + '📌 あなたはこのシナリオ実現率何%だと思う？コメントで教えてください！',
 stocks: s.stocks || [], metaphor: openingMeta, metaphors: s.metaphors,
 probability: s.probability, probabilityReason: s.probabilityReason || ''
 };
@@ -579,14 +597,28 @@ let t = text
 // マークダウンのコードブロック `json ... ` を除去
 const fenced = t.match(/`(?:json)?\s*([\s\S]*?)`/);
 if (fenced) t = fenced[1].trim();
-// 先頭・末尾の余分なテキストを除去（{ または [ から始まる部分を抽出）
+// 先頭の余分なテキストを除去（最初の { または [ から始める）
 const jsonStart = t.search(/[{[]/);
 if (jsonStart > 0) t = t.slice(jsonStart);
-const jsonEnd = Math.max(t.lastIndexOf('}'), t.lastIndexOf(']'));
-if (jsonEnd >= 0 && jsonEnd < t.length - 1) t = t.slice(0, jsonEnd + 1);
-// JSON文字列値の中のバッククォートを除去（テンプレートリテラル混入対策）
-// 文字列値 "..." の中身だけを対象に処理
-t = t.replace(/"((?:[^"\\]|\\.)*)"/g, (match, inner) => {
+// 末尾：対応する閉じ括弧までを切り出す（ネスト対応）
+if (t.length > 0) {
+const opener = t[0];
+const closer = opener === '{' ? '}' : ']';
+let depth = 0, inStr = false, esc = false, endIdx = -1;
+for (let i = 0; i < t.length; i++) {
+const c = t[i];
+if (esc) { esc = false; continue; }
+if (c === '\\' && inStr) { esc = true; continue; }
+if (c === '"') { inStr = !inStr; continue; }
+if (!inStr) {
+if (c === opener) depth++;
+else if (c === closer) { depth--; if (depth === 0) { endIdx = i; break; } }
+}
+}
+if (endIdx >= 0) t = t.slice(0, endIdx + 1);
+}
+// JSON文字列値の中のバッククォートを除去
+t = t.replace(/"((?:[^"\]|\.)*)"/g, (match, inner) => {
 return '"' + inner.replace(/`/g, "'") + '"';
 });
 return t;
@@ -610,6 +642,7 @@ if (!txt) return alert('AIの出力を貼り付けてください');
 try {
 const obj = JSON.parse(txt);
 
+```
 // revisedFields方式（新）: 変更箇所だけ上書き
 if (obj.revisedFields !== undefined) {
   const f = obj.revisedFields;
@@ -643,6 +676,7 @@ if (compResult) {
     compDisplay.innerHTML = '<div class="compliance-ng">⚠️ コンプライアンス: ' + compResult.replace(/\n/g, '<br>') + '</div>';
   }
 }
+```
 
 } catch(e) { alert('JSONの読み込み失敗:\n' + e.message); }
 }
@@ -657,7 +691,7 @@ const prob = currentArticleData.probability || '?';
 const openingMeta = (currentArticleData.metaphors && currentArticleData.metaphors.opening) || currentArticleData.metaphor || '';
 
 const storySnippet = currentArticleData.causalStory.replace(/\n/g, ' ').substring(0, 55);
-const xContent = '📈【桶屋ストーリーAI US】\n' + currentArticleData.title + '\n\n実現確率' + prob + '%のシナリオ\n\n' + storySnippet + '...\n\n🎯 注目ペニー株: ' + stocksLine + '\n\nあなたは何点？👇\n#PennyStocks #USStocks #桶屋理論 #米国株';
+const xContent = '📈【桶屋ストーリーAI US】\n' + currentArticleData.title + '\n\n実現確率' + prob + '%のシナリオ\n\n' + storySnippet + '...\n\n🎯 注目ペニー株: ' + stocksLine + '\n\n実現確率〇〇%👇\n#PennyStocks #USStocks #桶屋理論 #米国株';
 
 let note = '# ' + currentArticleData.title + '\n\n';
 note += '> 🎲 **実現確率: ' + prob + '%**' + (currentArticleData.probabilityReason ? '｜' + currentArticleData.probabilityReason : '') + '\n\n';
@@ -689,7 +723,7 @@ note += '### ' + s.name + '（' + s.code + '）\n' +
 '- **選出理由＆織り込み判定**: ' + s.reasoning + '\n\n';
 });
 note += '—\n\n';
-note += '💬 **あなたはこのシナリオ、何点だと思いますか？** コメントで教えてください！\n\n';
+note += '💬 **あなたはこのシナリオ実現確率何%だと思いますか？** コメントで教えてください！\n\n';
 note += '⚠️ *この記事はAIが生成した情報です。投資判断はご自身の責任でお願いします。株式投資にはリスクが伴います。過去の実績は将来の成果を保証するものではありません。*';
 
 document.getElementById('xOutput').value = xContent;
@@ -894,6 +928,31 @@ document.getElementById('stockPromptArea').style.display = 'block';
 }
 
 // ─── STEP1-B 銘柄マージ → STEP2へ ───────────────────
+// ─── ファクト＆コンプラプロンプト生成 ────────────────────
+function _buildFactCheckPrompt() {
+if (!currentArticleData) return;
+const st = (currentArticleData.stocks || []).map(function(s) {
+return s.name + '(' + s.code + ') $' + s.currentPrice + ' / ' + s.prediction;
+}).join(', ');
+const nw = (currentArticleData.newsChain || []).map(function(n, i) {
+return (i+1) + '. [' + (n.freshness === 'fresh' ? '24h' : '3-7d') + '] ' + n.headline;
+}).join('\n');
+const body = (currentArticleData.causalStory || '');
+document.getElementById('factCheckPrompt').value =
+'【ファクト＆コンプライアンス統合チェック（US株版）】\n' +
+'【タイトル】' + currentArticleData.title + '\n\n' +
+'【注目銘柄】\n' + st + '\n\n' +
+'【ニュース連鎖】\n' + nw + '\n\n' +
+'【ストーリー全文】\n' + body + '\n\n' +
+'===ファクトチェック===\n' +
+'各銘柄をYahoo Finance(finance.yahoo.com)で確認。$10未満か、ティッカー正しいか。\n\n' +
+'===コンプライアンス(緩め)===\n' +
+'断定的推奨表現・風説の流布がないか確認。\n\n' +
+'===出力形式(JSONのみ)===\n' +
+'修正あり: {"revisedFields":{"stocks":[...],"causalStory":"..."},"changes":"...","complianceResult":"OK/NG"}\n' +
+'修正なし: {"revisedFields":{},"changes":"修正なし","complianceResult":"OK: 問題なし"}';
+}
+
 function applyStockAndMerge() {
 const txt = normalizeJSON(document.getElementById('stockJsonInput').value);
 if (!txt) return alert('銘柄JSONを貼り付けてください');
@@ -902,6 +961,7 @@ const obj = JSON.parse(txt);
 const stocks = obj.stocks || (Array.isArray(obj) ? obj : null);
 if (!stocks || stocks.length === 0) throw new Error('"stocks" 配列が見つかりません');
 
+```
 // シナリオ全件にマージ
 multipleScenarios = multipleScenarios.map(s => ({ ...s, stocks: stocks }));
 // 現在選択中のシナリオにもマージ
@@ -918,6 +978,7 @@ if (currentArticleData) {
   setStep(3);
   window.scrollTo({ top: document.getElementById('previewCard').offsetTop - 20, behavior: 'smooth' });
 }
+```
 
 } catch(e) { alert('銘柄JSONの読み込み失敗:\n' + e.message); }
 }
